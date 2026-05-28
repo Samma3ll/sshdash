@@ -56,6 +56,12 @@ var (
 			Foreground(lipgloss.Color("203")).
 			Bold(true)
 
+	successStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("16")).
+			Background(lipgloss.Color("82")).
+			Bold(true).
+			Padding(0, 1)
+
 	countStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("229")).
 			Background(lipgloss.Color("62")).
@@ -88,6 +94,23 @@ var (
 			Foreground(lipgloss.Color("146")).
 			Background(lipgloss.Color("235")).
 			Padding(0, 1)
+
+	settingsPaneStyle = lipgloss.NewStyle().
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(lipgloss.Color("62")).
+				Padding(1, 2)
+
+	settingsActiveStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("16")).
+				Background(lipgloss.Color("159")).
+				Bold(true)
+
+	settingsLabelStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("231")).
+				Bold(true)
+
+	settingsValueStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("195"))
 )
 
 func panelStyle(title string) lipgloss.Style {

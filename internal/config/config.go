@@ -112,6 +112,39 @@ func Load(path string) (Config, error) {
 	return cfg, validate(cfg)
 }
 
+func Save(path string, cfg Config) error {
+	next := cloneConfig(cfg)
+	applyDefaults(&next)
+	if err := validate(next); err != nil {
+		return err
+	}
+
+	data, err := yaml.Marshal(toYAMLConfig(next))
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o600)
+}
+
+func cloneConfig(cfg Config) Config {
+	next := cfg
+	next.Services = append([]ServiceConfig(nil), cfg.Services...)
+	next.APIs = make([]APIConfig, 0, len(cfg.APIs))
+	for _, api := range cfg.APIs {
+		nextAPI := api
+		if api.Headers != nil {
+			nextAPI.Headers = make(map[string]string, len(api.Headers))
+			for key, value := range api.Headers {
+				nextAPI.Headers[key] = value
+			}
+		}
+		next.APIs = append(next.APIs, nextAPI)
+	}
+	next.Proxmox.Nodes = append([]string(nil), cfg.Proxmox.Nodes...)
+	next.ProxmoxBackup.Datastores = append([]string(nil), cfg.ProxmoxBackup.Datastores...)
+	return next
+}
+
 func applyDefaults(cfg *Config) {
 	if cfg.Server.Host == "" {
 		cfg.Server.Host = "0.0.0.0"
@@ -183,6 +216,172 @@ func applyDefaults(cfg *Config) {
 		applyMediaServiceDefaults(&cfg.Media.Radarr, "radarr")
 		applyMediaServiceDefaults(&cfg.Media.Sonarr, "sonarr")
 		applyMediaServiceDefaults(&cfg.Media.Jellyseerr, "jellyseerr")
+	}
+}
+
+type yamlDuration time.Duration
+
+func (d yamlDuration) MarshalYAML() (any, error) {
+	return time.Duration(d).String(), nil
+}
+
+type yamlConfig struct {
+	Server        ServerConfig            `yaml:"server"`
+	Refresh       yamlDuration            `yaml:"refresh"`
+	Services      []yamlServiceConfig     `yaml:"services"`
+	APIs          []yamlAPIConfig         `yaml:"apis"`
+	Docker        yamlDockerConfig        `yaml:"docker"`
+	Proxmox       yamlProxmoxConfig       `yaml:"proxmox"`
+	ProxmoxBackup yamlProxmoxBackupConfig `yaml:"proxmox_backup"`
+	Weather       yamlWeatherConfig       `yaml:"weather"`
+	Media         yamlMediaConfig         `yaml:"media"`
+}
+
+type yamlServiceConfig struct {
+	Name    string       `yaml:"name"`
+	Address string       `yaml:"address"`
+	Timeout yamlDuration `yaml:"timeout"`
+}
+
+type yamlAPIConfig struct {
+	Name    string            `yaml:"name"`
+	URL     string            `yaml:"url"`
+	Parser  string            `yaml:"parser"`
+	Headers map[string]string `yaml:"headers,omitempty"`
+	Timeout yamlDuration      `yaml:"timeout"`
+}
+
+type yamlDockerConfig struct {
+	Enabled     bool         `yaml:"enabled"`
+	Name        string       `yaml:"name"`
+	URL         string       `yaml:"url"`
+	Timeout     yamlDuration `yaml:"timeout"`
+	ShowStopped bool         `yaml:"show_stopped"`
+}
+
+type yamlProxmoxConfig struct {
+	Enabled       bool         `yaml:"enabled"`
+	Name          string       `yaml:"name"`
+	URL           string       `yaml:"url"`
+	Token         string       `yaml:"token"`
+	Timeout       yamlDuration `yaml:"timeout"`
+	Mode          string       `yaml:"mode"`
+	Nodes         []string     `yaml:"nodes"`
+	SkipTLSVerify bool         `yaml:"skip_tls_verify"`
+}
+
+type yamlProxmoxBackupConfig struct {
+	Enabled       bool         `yaml:"enabled"`
+	Name          string       `yaml:"name"`
+	URL           string       `yaml:"url"`
+	Token         string       `yaml:"token"`
+	Datastores    []string     `yaml:"datastores"`
+	Timeout       yamlDuration `yaml:"timeout"`
+	SkipTLSVerify bool         `yaml:"skip_tls_verify"`
+}
+
+type yamlWeatherConfig struct {
+	Enabled  bool         `yaml:"enabled"`
+	Name     string       `yaml:"name"`
+	Location string       `yaml:"location"`
+	URL      string       `yaml:"url"`
+	Timeout  yamlDuration `yaml:"timeout"`
+}
+
+type yamlMediaConfig struct {
+	Enabled    bool                   `yaml:"enabled"`
+	Name       string                 `yaml:"name"`
+	Jellyfin   yamlMediaServiceConfig `yaml:"jellyfin"`
+	Radarr     yamlMediaServiceConfig `yaml:"radarr"`
+	Sonarr     yamlMediaServiceConfig `yaml:"sonarr"`
+	Jellyseerr yamlMediaServiceConfig `yaml:"jellyseerr"`
+}
+
+type yamlMediaServiceConfig struct {
+	Enabled bool         `yaml:"enabled"`
+	Name    string       `yaml:"name"`
+	URL     string       `yaml:"url"`
+	APIKey  string       `yaml:"api_key"`
+	Timeout yamlDuration `yaml:"timeout"`
+}
+
+func toYAMLConfig(cfg Config) yamlConfig {
+	services := make([]yamlServiceConfig, 0, len(cfg.Services))
+	for _, service := range cfg.Services {
+		services = append(services, yamlServiceConfig{
+			Name:    service.Name,
+			Address: service.Address,
+			Timeout: yamlDuration(service.Timeout),
+		})
+	}
+
+	apis := make([]yamlAPIConfig, 0, len(cfg.APIs))
+	for _, api := range cfg.APIs {
+		apis = append(apis, yamlAPIConfig{
+			Name:    api.Name,
+			URL:     api.URL,
+			Parser:  api.Parser,
+			Headers: api.Headers,
+			Timeout: yamlDuration(api.Timeout),
+		})
+	}
+
+	return yamlConfig{
+		Server:   cfg.Server,
+		Refresh:  yamlDuration(cfg.Refresh),
+		Services: services,
+		APIs:     apis,
+		Docker: yamlDockerConfig{
+			Enabled:     cfg.Docker.Enabled,
+			Name:        cfg.Docker.Name,
+			URL:         cfg.Docker.URL,
+			Timeout:     yamlDuration(cfg.Docker.Timeout),
+			ShowStopped: cfg.Docker.ShowStopped,
+		},
+		Proxmox: yamlProxmoxConfig{
+			Enabled:       cfg.Proxmox.Enabled,
+			Name:          cfg.Proxmox.Name,
+			URL:           cfg.Proxmox.URL,
+			Token:         cfg.Proxmox.Token,
+			Timeout:       yamlDuration(cfg.Proxmox.Timeout),
+			Mode:          cfg.Proxmox.Mode,
+			Nodes:         cfg.Proxmox.Nodes,
+			SkipTLSVerify: cfg.Proxmox.SkipTLSVerify,
+		},
+		ProxmoxBackup: yamlProxmoxBackupConfig{
+			Enabled:       cfg.ProxmoxBackup.Enabled,
+			Name:          cfg.ProxmoxBackup.Name,
+			URL:           cfg.ProxmoxBackup.URL,
+			Token:         cfg.ProxmoxBackup.Token,
+			Datastores:    cfg.ProxmoxBackup.Datastores,
+			Timeout:       yamlDuration(cfg.ProxmoxBackup.Timeout),
+			SkipTLSVerify: cfg.ProxmoxBackup.SkipTLSVerify,
+		},
+		Weather: yamlWeatherConfig{
+			Enabled:  cfg.Weather.Enabled,
+			Name:     cfg.Weather.Name,
+			Location: cfg.Weather.Location,
+			URL:      cfg.Weather.URL,
+			Timeout:  yamlDuration(cfg.Weather.Timeout),
+		},
+		Media: yamlMediaConfig{
+			Enabled:    cfg.Media.Enabled,
+			Name:       cfg.Media.Name,
+			Jellyfin:   toYAMLMediaService(cfg.Media.Jellyfin),
+			Radarr:     toYAMLMediaService(cfg.Media.Radarr),
+			Sonarr:     toYAMLMediaService(cfg.Media.Sonarr),
+			Jellyseerr: toYAMLMediaService(cfg.Media.Jellyseerr),
+		},
+	}
+}
+
+func toYAMLMediaService(service MediaServiceConfig) yamlMediaServiceConfig {
+	return yamlMediaServiceConfig{
+		Enabled: service.Enabled,
+		Name:    service.Name,
+		URL:     service.URL,
+		APIKey:  service.APIKey,
+		Timeout: yamlDuration(service.Timeout),
 	}
 }
 

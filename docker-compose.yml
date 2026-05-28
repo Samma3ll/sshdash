@@ -5,7 +5,7 @@ services:
     ports:
       - "23234:23234"
     volumes:
-      - ./config.yaml:/app/config.yaml:ro
+      - ./config.yaml:/app/config.yaml
       - sshdash-keys:/app/.ssh
 
 volumes:
