@@ -1,0 +1,12 @@
+services:
+  sshdash:
+    build: .
+    image: sshdash
+    ports:
+      - "23234:23234"
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      - sshdash-keys:/app/.ssh
+
+volumes:
+  sshdash-keys:
