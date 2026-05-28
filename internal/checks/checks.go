@@ -36,7 +36,7 @@ type Checker interface {
 }
 
 func FromConfig(cfg config.Config) []Checker {
-	checkers := make([]Checker, 0, len(cfg.Services)+len(cfg.APIs)+7)
+	checkers := make([]Checker, 0, len(cfg.Services)+len(cfg.APIs)+11)
 	for _, service := range cfg.Services {
 		checkers = append(checkers, ServiceChecker{Config: service})
 	}
@@ -56,6 +56,20 @@ func FromConfig(cfg config.Config) []Checker {
 	}
 	if cfg.Weather.Enabled {
 		checkers = append(checkers, WeatherChecker{Config: cfg.Weather})
+	}
+	if cfg.Media.Enabled {
+		if cfg.Media.Jellyfin.Enabled {
+			checkers = append(checkers, JellyfinMediaChecker{Config: cfg.Media.Jellyfin})
+		}
+		if cfg.Media.Radarr.Enabled {
+			checkers = append(checkers, RadarrMediaChecker{Config: cfg.Media.Radarr})
+		}
+		if cfg.Media.Sonarr.Enabled {
+			checkers = append(checkers, SonarrMediaChecker{Config: cfg.Media.Sonarr})
+		}
+		if cfg.Media.Jellyseerr.Enabled {
+			checkers = append(checkers, JellyseerrMediaChecker{Config: cfg.Media.Jellyseerr})
+		}
 	}
 	return checkers
 }

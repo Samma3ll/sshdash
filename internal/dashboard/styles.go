@@ -70,6 +70,20 @@ var (
 			Padding(0, 1).
 			MarginBottom(1)
 
+	tabsStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("255")).
+			Background(lipgloss.Color("235")).
+			Padding(0, 1)
+
+	activeTabStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("16")).
+			Background(lipgloss.Color("159")).
+			Bold(true)
+
+	inactiveTabStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("146")).
+				Background(lipgloss.Color("235"))
+
 	helpStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("146")).
 			Background(lipgloss.Color("235")).
@@ -99,6 +113,8 @@ func panelAccent(title string) lipgloss.Color {
 		return lipgloss.Color("39")
 	case "Docker Containers":
 		return lipgloss.Color("45")
+	case "Jellyfin Library", "Radarr", "Sonarr", "Jellyseerr":
+		return lipgloss.Color("99")
 	case "Proxmox Health", "Proxmox VMs":
 		return lipgloss.Color("208")
 	case "PBS Health", "PBS Datastore Details":

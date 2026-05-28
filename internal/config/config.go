@@ -20,6 +20,7 @@ type Config struct {
 	Proxmox       ProxmoxConfig       `yaml:"proxmox"`
 	ProxmoxBackup ProxmoxBackupConfig `yaml:"proxmox_backup"`
 	Weather       WeatherConfig       `yaml:"weather"`
+	Media         MediaConfig         `yaml:"media"`
 }
 
 type ServerConfig struct {
@@ -77,6 +78,23 @@ type WeatherConfig struct {
 	Location string        `yaml:"location"`
 	URL      string        `yaml:"url"`
 	Timeout  time.Duration `yaml:"timeout"`
+}
+
+type MediaConfig struct {
+	Enabled    bool               `yaml:"enabled"`
+	Name       string             `yaml:"name"`
+	Jellyfin   MediaServiceConfig `yaml:"jellyfin"`
+	Radarr     MediaServiceConfig `yaml:"radarr"`
+	Sonarr     MediaServiceConfig `yaml:"sonarr"`
+	Jellyseerr MediaServiceConfig `yaml:"jellyseerr"`
+}
+
+type MediaServiceConfig struct {
+	Enabled bool          `yaml:"enabled"`
+	Name    string        `yaml:"name"`
+	URL     string        `yaml:"url"`
+	APIKey  string        `yaml:"api_key"`
+	Timeout time.Duration `yaml:"timeout"`
 }
 
 func Load(path string) (Config, error) {
@@ -157,6 +175,27 @@ func applyDefaults(cfg *Config) {
 			cfg.Weather.Timeout = 5 * time.Second
 		}
 	}
+	if cfg.Media.Enabled {
+		if cfg.Media.Name == "" {
+			cfg.Media.Name = "media"
+		}
+		applyMediaServiceDefaults(&cfg.Media.Jellyfin, "jellyfin")
+		applyMediaServiceDefaults(&cfg.Media.Radarr, "radarr")
+		applyMediaServiceDefaults(&cfg.Media.Sonarr, "sonarr")
+		applyMediaServiceDefaults(&cfg.Media.Jellyseerr, "jellyseerr")
+	}
+}
+
+func applyMediaServiceDefaults(service *MediaServiceConfig, name string) {
+	if !service.Enabled {
+		return
+	}
+	if service.Name == "" {
+		service.Name = name
+	}
+	if service.Timeout == 0 {
+		service.Timeout = 5 * time.Second
+	}
 }
 
 func validate(cfg Config) error {
@@ -197,6 +236,36 @@ func validate(cfg Config) error {
 	}
 	if cfg.Weather.Enabled && cfg.Weather.Location == "" && cfg.Weather.URL == "" {
 		return errors.New("weather.location or weather.url is required when weather.enabled is true")
+	}
+	if cfg.Media.Enabled {
+		if !cfg.Media.Jellyfin.Enabled && !cfg.Media.Radarr.Enabled && !cfg.Media.Sonarr.Enabled && !cfg.Media.Jellyseerr.Enabled {
+			return errors.New("media requires at least one enabled service")
+		}
+		if err := validateMediaService("media.jellyfin", cfg.Media.Jellyfin, true); err != nil {
+			return err
+		}
+		if err := validateMediaService("media.radarr", cfg.Media.Radarr, true); err != nil {
+			return err
+		}
+		if err := validateMediaService("media.sonarr", cfg.Media.Sonarr, true); err != nil {
+			return err
+		}
+		if err := validateMediaService("media.jellyseerr", cfg.Media.Jellyseerr, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateMediaService(prefix string, service MediaServiceConfig, requireAPIKey bool) error {
+	if !service.Enabled {
+		return nil
+	}
+	if service.URL == "" {
+		return errors.New(prefix + ".url is required when enabled")
+	}
+	if requireAPIKey && service.APIKey == "" {
+		return errors.New(prefix + ".api_key is required when enabled")
 	}
 	return nil
 }

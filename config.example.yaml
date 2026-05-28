@@ -58,3 +58,30 @@ weather:
   name: weather
   location: Amsterdam
   timeout: 5s
+media:
+  enabled: false
+  name: media
+  jellyfin:
+    enabled: false
+    name: jellyfin
+    url: http://jellyfin.local:8096
+    api_key: YOUR_JELLYFIN_API_KEY
+    timeout: 5s
+  radarr:
+    enabled: false
+    name: radarr
+    url: http://radarr.local:7878
+    api_key: YOUR_RADARR_API_KEY
+    timeout: 5s
+  sonarr:
+    enabled: false
+    name: sonarr
+    url: http://sonarr.local:8989
+    api_key: YOUR_SONARR_API_KEY
+    timeout: 5s
+  jellyseerr:
+    enabled: false
+    name: jellyseerr
+    url: http://jellyseerr.local:5055
+    api_key: YOUR_JELLYSEERR_API_KEY
+    timeout: 5s
