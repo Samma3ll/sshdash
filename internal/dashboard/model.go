@@ -25,6 +25,7 @@ type model struct {
 	width    int
 	height   int
 	err      error
+	tab      int
 }
 
 type checkResultsMsg []checks.Result
@@ -32,6 +33,8 @@ type checkResultsMsg []checks.Result
 type errMsg struct {
 	err error
 }
+
+var dashboardTabs = []string{"Overview", "Media"}
 
 func NewProgram(cfg config.Config) func(ssh.Session) (tea.Model, []tea.ProgramOption) {
 	return func(_ ssh.Session) (tea.Model, []tea.ProgramOption) {
@@ -65,6 +68,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		case "r":
 			return m, m.runChecks()
+		case "tab", "right", "l":
+			m.tab = (m.tab + 1) % len(dashboardTabs)
+			return m, nil
+		case "shift+tab", "left", "h":
+			m.tab = (m.tab + len(dashboardTabs) - 1) % len(dashboardTabs)
+			return m, nil
+		case "1":
+			m.tab = 0
+			return m, nil
+		case "2":
+			m.tab = 1
+			return m, nil
 		}
 	case spinner.TickMsg:
 		var cmd tea.Cmd
@@ -99,10 +114,11 @@ func (m model) View() string {
 			subtitleStyle.Render("home network dashboard"),
 		),
 	)
-	help := helpStyle.Render("r refresh  q quit")
+	tabs := m.renderTabs()
+	help := helpStyle.Render("tab switch  1 overview  2 media  r refresh  q quit")
 
 	body := m.renderBody()
-	content := lipgloss.JoinVertical(lipgloss.Left, header, "", body, "", help)
+	content := lipgloss.JoinVertical(lipgloss.Left, header, tabs, "", body, "", help)
 
 	if m.height > 0 {
 		return lipgloss.Place(m.width, m.height, lipgloss.Left, lipgloss.Top, content)
@@ -145,7 +161,18 @@ func (m model) renderBody() string {
 	services := filterResults(m.results, "service")
 	apis := filterResults(m.results, "api")
 	summary := m.renderSummaryBar()
-	panels := m.renderDashboardColumns([][]dashboardCard{
+	var panels string
+	if dashboardTabs[m.tab] == "Media" {
+		panels = m.renderMediaPage()
+	} else {
+		panels = m.renderOverviewPage(services, apis)
+	}
+
+	return lipgloss.JoinVertical(lipgloss.Left, summary, panels)
+}
+
+func (m model) renderOverviewPage(services []checks.Result, apis []checks.Result) string {
+	return m.renderDashboardColumns([][]dashboardCard{
 		{
 			{Sections: []dashboardSection{
 				{Title: "Services", Results: services, AlwaysShow: true},
@@ -170,8 +197,36 @@ func (m model) renderBody() string {
 			}},
 		},
 	})
+}
 
-	return lipgloss.JoinVertical(lipgloss.Left, summary, panels)
+func (m model) renderMediaPage() string {
+	mediaCard := dashboardCard{Sections: []dashboardSection{
+		{Title: "Jellyfin Library", Results: filterResults(m.results, "media-jellyfin")},
+		{Title: "Radarr", Results: filterResults(m.results, "media-radarr")},
+		{Title: "Sonarr", Results: filterResults(m.results, "media-sonarr")},
+		{Title: "Jellyseerr", Results: filterResults(m.results, "media-jellyseerr")},
+	}}
+	if len(mediaCard.visibleSections()) == 0 {
+		return mutedStyle.Render("No media services configured.")
+	}
+
+	return m.renderDashboardColumns([][]dashboardCard{
+		{mediaCard},
+	})
+}
+
+func (m model) renderTabs() string {
+	width := max(42, min(m.width, 110))
+	rendered := make([]string, 0, len(dashboardTabs))
+	for index, title := range dashboardTabs {
+		label := fmt.Sprintf(" %d %s ", index+1, title)
+		style := inactiveTabStyle
+		if index == m.tab {
+			style = activeTabStyle
+		}
+		rendered = append(rendered, style.Render(label))
+	}
+	return tabsStyle.Width(width).Render(lipgloss.JoinHorizontal(lipgloss.Top, rendered...))
 }
 
 type dashboardCard struct {

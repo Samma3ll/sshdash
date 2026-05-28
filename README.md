@@ -18,6 +18,7 @@ ssh localhost -p 23234
 ```
 
 The first run creates the SSH host key at `.ssh/sshdash_ed25519`.
+Inside the dashboard, press `tab` or the arrow keys to switch pages. Press `1` for Overview and `2` for Media.
 
 ## Run With Docker
 
@@ -101,6 +102,25 @@ weather:
   name: weather
   location: Amsterdam
   timeout: 5s
+media:
+  enabled: true
+  name: media
+  jellyfin:
+    enabled: true
+    url: http://jellyfin.local:8096
+    api_key: YOUR_JELLYFIN_API_KEY
+  radarr:
+    enabled: true
+    url: http://radarr.local:7878
+    api_key: YOUR_RADARR_API_KEY
+  sonarr:
+    enabled: true
+    url: http://sonarr.local:8989
+    api_key: YOUR_SONARR_API_KEY
+  jellyseerr:
+    enabled: true
+    url: http://jellyseerr.local:5055
+    api_key: YOUR_JELLYSEERR_API_KEY
 ```
 
 Durations use Go duration syntax such as `2s`, `30s`, or `1m`.
@@ -123,6 +143,9 @@ Optional infrastructure modules:
 - `proxmox`: uses the Proxmox VE API and renders `Proxmox Health` plus `Proxmox VMs` cards. Leave `nodes: []` for the whole cluster, or list node names to filter.
 - `proxmox_backup`: uses the Proxmox Backup Server API. `PBS Health` shows tasks from the last 24 hours; `PBS Datastore Details` shows datastore usage.
 - `weather`: uses `wttr.in` by default and renders the current weather in the top summary bar.
+- `media`: renders a media details card. Jellyfin reads `/Items/Counts` for library totals; Radarr reads `/api/v3/movie`; Sonarr reads `/api/v3/series`; Jellyseerr reads `/api/v1/status` and `/api/v1/request/count`.
+
+Jellyfin requires an API key with library access. Radarr, Sonarr, and Jellyseerr use their normal API keys. Enable only the services you run; each enabled child service needs its own `url` and, except for basic Jellyseerr status, an `api_key`.
 
 Proxmox VE usually serves its API over HTTPS on port `8006`; PBS usually uses HTTPS on port `8007`. If either uses a self-signed certificate, set `skip_tls_verify: true` for that module.
 
