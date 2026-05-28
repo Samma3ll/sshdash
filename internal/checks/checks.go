@@ -36,7 +36,7 @@ type Checker interface {
 }
 
 func FromConfig(cfg config.Config) []Checker {
-	checkers := make([]Checker, 0, len(cfg.Services)+len(cfg.APIs)+11)
+	checkers := make([]Checker, 0, len(cfg.Services)+len(cfg.APIs)+10)
 	for _, service := range cfg.Services {
 		checkers = append(checkers, ServiceChecker{Config: service})
 	}

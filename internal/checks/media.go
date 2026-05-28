@@ -225,7 +225,7 @@ func (c JellyseerrMediaChecker) Check(ctx context.Context) Result {
 	return result(c.Config.Name, "media-jellyseerr", status, countURL, summary, details, start)
 }
 
-func fetchMediaJSON(ctx context.Context, cfg config.MediaServiceConfig, checkURL string, apiKeyHeader string) ([]byte, error) {
+func fetchMediaJSON(ctx context.Context, cfg config.MediaServiceConfig, checkURL string, apiKeyHeader string) (body []byte, err error) {
 	reqCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
 	defer cancel()
 
@@ -241,9 +241,13 @@ func fetchMediaJSON(ctx context.Context, cfg config.MediaServiceConfig, checkURL
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if cerr := resp.Body.Close(); cerr != nil && err == nil {
+			err = cerr
+		}
+	}()
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 4*1024*1024))
+	body, err = io.ReadAll(io.LimitReader(resp.Body, 4*1024*1024))
 	if err != nil {
 		return nil, err
 	}
@@ -434,12 +438,12 @@ func SonarrSummary(series []sonarrSeries, version string) (Status, string, []str
 	for _, item := range series {
 		if item.Monitored {
 			monitored++
-		}
-		episodeFiles += item.Statistics.EpisodeFileCount
-		if item.Statistics.TotalEpisodeCount > 0 {
-			episodes += item.Statistics.TotalEpisodeCount
-		} else {
-			episodes += item.Statistics.EpisodeCount
+			episodeFiles += item.Statistics.EpisodeFileCount
+			if item.Statistics.TotalEpisodeCount > 0 {
+				episodes += item.Statistics.TotalEpisodeCount
+			} else {
+				episodes += item.Statistics.EpisodeCount
+			}
 		}
 	}
 

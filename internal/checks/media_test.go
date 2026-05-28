@@ -87,6 +87,29 @@ func TestSonarrSummaryUsesEpisodeTotals(t *testing.T) {
 	}
 }
 
+func TestSonarrSummaryIgnoresUnmonitoredEpisodeTotals(t *testing.T) {
+	series := []sonarrSeries{
+		{Title: "Kept", Monitored: true},
+		{Title: "Ignored", Monitored: false},
+	}
+	series[0].Statistics.EpisodeFileCount = 10
+	series[0].Statistics.TotalEpisodeCount = 10
+	series[1].Statistics.EpisodeFileCount = 0
+	series[1].Statistics.TotalEpisodeCount = 100
+
+	status, summary, details := SonarrSummary(series, "")
+
+	if status != StatusOK {
+		t.Fatalf("status = %q, want %q", status, StatusOK)
+	}
+	if summary != "2 series, 0 missing episodes" {
+		t.Fatalf("summary = %q", summary)
+	}
+	if !strings.Contains(strings.Join(details, "\n"), "episodes 10/10") {
+		t.Fatalf("details = %#v", details)
+	}
+}
+
 func TestJellyseerrSummaryWarnsForPendingRequests(t *testing.T) {
 	status, summary, _ := JellyseerrSummary(jellyseerrStatus{Version: "1.2.3"}, jellyseerrRequestCount{
 		Total:   6,
