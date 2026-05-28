@@ -18,13 +18,13 @@ ssh localhost -p 23234
 ```
 
 The first run creates the SSH host key at `.ssh/sshdash_ed25519`.
-Inside the dashboard, press `tab` or the arrow keys to switch pages. Press `1` for Overview and `2` for Media.
+Inside the dashboard, press `tab` or the arrow keys to switch pages. Press `1` for Overview, `2` for Media, and `s` for Settings.
 
 ## Run With Docker
 
 ```sh
 docker build -t sshdash .
-docker run --rm -it -p 23234:23234 --mount type=bind,source="$(pwd)/config.yaml",target=/app/config.yaml,readonly sshdash
+docker run --rm -it -p 23234:23234 --mount type=bind,source="$(pwd)/config.yaml",target=/app/config.yaml sshdash
 ```
 
 Connect with:
@@ -36,7 +36,7 @@ ssh localhost -p 23234
 On PowerShell, prefer `Resolve-Path` so Docker receives an absolute Windows path:
 
 ```powershell
-docker run --rm -it -p 23234:23234 --mount type=bind,source="$(Resolve-Path .\config.yaml)",target=/app/config.yaml,readonly sshdash
+docker run --rm -it -p 23234:23234 --mount type=bind,source="$(Resolve-Path .\config.yaml)",target=/app/config.yaml sshdash
 ```
 
 Or use Compose:
@@ -45,7 +45,22 @@ Or use Compose:
 docker compose up --build
 ```
 
-The app reads config once during startup. After editing `config.yaml`, restart the container.
+The settings screen writes back to `config.yaml` and reloads checks immediately. If you prefer to manage config outside the app, a read-only mount is fine, but in-app saving requires a writable bind mount.
+
+## Settings
+
+Press `s` to open Settings from the dashboard. Startup-only SSH server fields stay in `config.yaml`, but the settings screen can edit refresh timing and every dashboard card/check section.
+
+Settings keys:
+
+- `tab` / `shift+tab`: move between sections.
+- `up` / `down`: select a field.
+- `enter`: edit a text field or toggle a boolean.
+- `a`: add a service or API row.
+- `d`: delete the selected service, API, or API header row.
+- `h`: add a header to the selected API.
+- `ctrl+s`: validate, save `config.yaml`, reload checks, and return to the dashboard.
+- `esc`: return to the dashboard without saving.
 
 ## Configuration
 

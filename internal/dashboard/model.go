@@ -18,6 +18,8 @@ import (
 )
 
 type model struct {
+	cfg      config.Config
+	cfgPath  string
 	checkers []checks.Checker
 	results  []checks.Result
 	refresh  time.Duration
@@ -26,6 +28,9 @@ type model struct {
 	height   int
 	err      error
 	tab      int
+	mode     appMode
+	settings settingsModel
+	status   string
 }
 
 type checkResultsMsg []checks.Result
@@ -34,21 +39,39 @@ type errMsg struct {
 	err error
 }
 
+type settingsSavedMsg struct {
+	cfg config.Config
+	err error
+}
+
+type appMode int
+
+const (
+	modeDashboard appMode = iota
+	modeSettings
+)
+
 var dashboardTabs = []string{"Overview", "Media"}
 
-func NewProgram(cfg config.Config) func(ssh.Session) (tea.Model, []tea.ProgramOption) {
+func NewProgram(cfg config.Config, cfgPath string) func(ssh.Session) (tea.Model, []tea.ProgramOption) {
 	return func(_ ssh.Session) (tea.Model, []tea.ProgramOption) {
 		lipgloss.SetColorProfile(termenv.ANSI256)
 
-		spin := spinner.New()
-		spin.Spinner = spinner.Dot
-		spin.Style = spinnerStyle
+		return newModel(cfg, cfgPath), []tea.ProgramOption{tea.WithAltScreen()}
+	}
+}
 
-		return model{
-			checkers: checks.FromConfig(cfg),
-			refresh:  cfg.Refresh,
-			spinner:  spin,
-		}, []tea.ProgramOption{tea.WithAltScreen()}
+func newModel(cfg config.Config, cfgPath string) model {
+	spin := spinner.New()
+	spin.Spinner = spinner.Dot
+	spin.Style = spinnerStyle
+
+	return model{
+		cfg:      cfg,
+		cfgPath:  cfgPath,
+		checkers: checks.FromConfig(cfg),
+		refresh:  cfg.Refresh,
+		spinner:  spin,
 	}
 }
 
@@ -63,10 +86,22 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		return m, nil
 	case tea.KeyMsg:
-		switch msg.String() {
-		case "ctrl+c", "q":
+		if msg.String() == "ctrl+c" {
 			return m, tea.Quit
+		}
+		if m.mode == modeSettings {
+			return m.updateSettings(msg)
+		}
+		switch msg.String() {
+		case "q":
+			return m, tea.Quit
+		case "s":
+			m.mode = modeSettings
+			m.settings = newSettingsModel(m.cfg)
+			m.status = ""
+			return m, nil
 		case "r":
+			m.status = ""
 			return m, m.runChecks()
 		case "tab", "right", "l":
 			m.tab = (m.tab + 1) % len(dashboardTabs)
@@ -94,11 +129,40 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case errMsg:
 		m.err = msg.err
 		return m, nil
+	case settingsSavedMsg:
+		if msg.err != nil {
+			m.settings.notice = "Save failed: " + msg.err.Error()
+			return m, nil
+		}
+		m.cfg = msg.cfg
+		m.refresh = msg.cfg.Refresh
+		m.checkers = checks.FromConfig(msg.cfg)
+		m.results = nil
+		m.err = nil
+		m.status = "settings saved"
+		m.mode = modeDashboard
+		return m, m.runChecks()
 	case tickMsg:
 		return m, m.runChecks()
 	}
 
 	return m, nil
+}
+
+func (m model) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	next, action := m.settings.Update(msg)
+	m.settings = next
+
+	switch action {
+	case settingsActionClose:
+		m.mode = modeDashboard
+		return m, nil
+	case settingsActionSave:
+		m.status = ""
+		return m, m.saveSettings()
+	default:
+		return m, nil
+	}
 }
 
 func (m model) View() string {
@@ -114,11 +178,25 @@ func (m model) View() string {
 			subtitleStyle.Render("home network dashboard"),
 		),
 	)
-	tabs := m.renderTabs()
-	help := helpStyle.Render("tab switch  1 overview  2 media  r refresh  q quit")
+	if m.mode == modeSettings {
+		body := m.settings.View(m.width, m.height)
+		help := helpStyle.Render("tab sections  up/down field  enter edit/toggle  a add  d delete  h header  ctrl+s save  esc back")
+		content := lipgloss.JoinVertical(lipgloss.Left, header, "", body, "", help)
+		if m.height > 0 {
+			return lipgloss.Place(m.width, m.height, lipgloss.Left, lipgloss.Top, content)
+		}
+		return content
+	}
 
+	tabs := m.renderTabs()
+	help := helpStyle.Render("tab switch  1 overview  2 media  r refresh  s settings  q quit")
 	body := m.renderBody()
-	content := lipgloss.JoinVertical(lipgloss.Left, header, tabs, "", body, "", help)
+	parts := []string{header, tabs}
+	if m.status != "" {
+		parts = append(parts, successStyle.Render(m.status))
+	}
+	parts = append(parts, "", body, "", help)
+	content := lipgloss.JoinVertical(lipgloss.Left, parts...)
 
 	if m.height > 0 {
 		return lipgloss.Place(m.width, m.height, lipgloss.Left, lipgloss.Top, content)
@@ -144,6 +222,18 @@ func (m model) runChecks() tea.Cmd {
 			return results[i].Kind < results[j].Kind
 		})
 		return checkResultsMsg(results)
+	}
+}
+
+func (m model) saveSettings() tea.Cmd {
+	pending := m.settings.pending
+	path := m.cfgPath
+	return func() tea.Msg {
+		if err := config.Save(path, pending); err != nil {
+			return settingsSavedMsg{err: err}
+		}
+		cfg, err := config.Load(path)
+		return settingsSavedMsg{cfg: cfg, err: err}
 	}
 }
 

@@ -38,7 +38,7 @@ func main() {
 		wish.WithAddress(addr),
 		wish.WithHostKeyPath(cfg.Server.HostKeyPath),
 		wish.WithMiddleware(
-			bubbletea.MiddlewareWithColorProfile(dashboard.NewProgram(cfg), termenv.ANSI256),
+			bubbletea.MiddlewareWithColorProfile(dashboard.NewProgram(cfg, cfgPath), termenv.ANSI256),
 			logging.Middleware(),
 		),
 	)
