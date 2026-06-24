@@ -26,16 +26,18 @@ type proxmoxResourceResponse struct {
 }
 
 type proxmoxResource struct {
-	Type   string  `json:"type"`
-	Node   string  `json:"node"`
-	VMID   int     `json:"vmid"`
-	Name   string  `json:"name"`
-	Status string  `json:"status"`
-	CPU    float64 `json:"cpu"`
-	MaxCPU float64 `json:"maxcpu"`
-	Mem    float64 `json:"mem"`
-	MaxMem float64 `json:"maxmem"`
-	Uptime float64 `json:"uptime"`
+	Type    string  `json:"type"`
+	Node    string  `json:"node"`
+	VMID    int     `json:"vmid"`
+	Name    string  `json:"name"`
+	Status  string  `json:"status"`
+	CPU     float64 `json:"cpu"`
+	MaxCPU  float64 `json:"maxcpu"`
+	Mem     float64 `json:"mem"`
+	MaxMem  float64 `json:"maxmem"`
+	Disk    float64 `json:"disk"`
+	MaxDisk float64 `json:"maxdisk"`
+	Uptime  float64 `json:"uptime"`
 }
 
 func (c ProxmoxHealthChecker) Name() string {
@@ -110,6 +112,7 @@ func ParseProxmoxResources(body []byte) ([]proxmoxResource, error) {
 func ProxmoxHealthSummary(resources []proxmoxResource) (Status, string, []string) {
 	var online, offline int
 	details := []string{}
+	warnings := []string{}
 	for _, resource := range resources {
 		if resource.Type != "node" {
 			continue
@@ -119,56 +122,149 @@ func ProxmoxHealthSummary(resources []proxmoxResource) (Status, string, []string
 		} else {
 			offline++
 		}
-		details = append(details, fmt.Sprintf("%s: %s cpu %s mem %s", resource.Node, resource.Status, percent(resource.CPU), ratioPercent(resource.Mem, resource.MaxMem)))
+		details = append(details, fmt.Sprintf(
+			"%s: %s\ncpu %s  mem %s (%s / %s)  disk %s (%s / %s)  uptime %s",
+			resource.Node,
+			resource.Status,
+			cpuSummary(resource),
+			ratioPercent(resource.Mem, resource.MaxMem),
+			bytesHuman(resource.Mem),
+			bytesHuman(resource.MaxMem),
+			ratioPercent(resource.Disk, resource.MaxDisk),
+			bytesHuman(resource.Disk),
+			bytesHuman(resource.MaxDisk),
+			durationHuman(resource.Uptime),
+		))
+		warnings = append(warnings, proxmoxNodeWarnings(resource)...)
 	}
+	sort.Strings(details)
+	sort.Strings(warnings)
 
 	status := StatusOK
 	if offline > 0 {
 		status = StatusError
 	}
+	if len(warnings) > 0 && status != StatusError {
+		status = StatusWarning
+	}
 	if online == 0 {
 		status = StatusError
+	}
+	if len(warnings) > 0 {
+		details = append([]string{"Warnings:\n" + strings.Join(warnings, "\n")}, details...)
 	}
 	return status, fmt.Sprintf("%d online, %d offline nodes", online, offline), details
 }
 
 func ProxmoxVMSummary(resources []proxmoxResource) (Status, string, []string) {
-	var running, stopped int
+	var runningVMs, stoppedVMs, runningLXCs, stoppedLXCs int
 	details := []string{}
 	for _, resource := range resources {
-		if resource.Type != "qemu" {
+		if resource.Type != "qemu" && resource.Type != "lxc" {
 			continue
 		}
-		if strings.EqualFold(resource.Status, "running") {
-			running++
-		} else {
-			stopped++
+		isRunning := strings.EqualFold(resource.Status, "running")
+		switch resource.Type {
+		case "qemu":
+			if isRunning {
+				runningVMs++
+			} else {
+				stoppedVMs++
+			}
+		case "lxc":
+			if isRunning {
+				runningLXCs++
+			} else {
+				stoppedLXCs++
+			}
 		}
-		name := resource.Name
-		if name == "" {
-			name = fmt.Sprintf("%d", resource.VMID)
-		}
-		details = append(details, fmt.Sprintf(
-			"%d %s @ %s: %s\ncpu %s  mem %s  uptime %s",
-			resource.VMID,
-			name,
-			resource.Node,
-			resource.Status,
-			percent(resource.CPU),
-			ratioPercent(resource.Mem, resource.MaxMem),
-			durationHuman(resource.Uptime),
-		))
+		details = append(details, proxmoxGuestLine(resource))
 	}
 	sort.Strings(details)
 
 	status := StatusOK
-	if stopped > 0 {
+	if stoppedVMs > 0 || stoppedLXCs > 0 {
 		status = StatusWarning
 	}
-	if running == 0 && stopped == 0 {
+	if runningVMs+stoppedVMs+runningLXCs+stoppedLXCs == 0 {
 		status = StatusWarning
 	}
-	return status, fmt.Sprintf("%d running, %d stopped VMs", running, stopped), limitDetails(details, 10)
+	return status, proxmoxGuestSummary(runningVMs, stoppedVMs, runningLXCs, stoppedLXCs), limitDetails(details, 16)
+}
+
+func proxmoxGuestSummary(runningVMs, stoppedVMs, runningLXCs, stoppedLXCs int) string {
+	if runningLXCs == 0 && stoppedLXCs == 0 {
+		return fmt.Sprintf("%d running, %d stopped VMs", runningVMs, stoppedVMs)
+	}
+	return fmt.Sprintf(
+		"VMs: %d running, %d stopped; LXCs: %d running, %d stopped",
+		runningVMs,
+		stoppedVMs,
+		runningLXCs,
+		stoppedLXCs,
+	)
+}
+
+func proxmoxGuestLine(resource proxmoxResource) string {
+	name := resource.Name
+	if name == "" {
+		name = fmt.Sprintf("%d", resource.VMID)
+	}
+	kind := "vm"
+	if resource.Type == "lxc" {
+		kind = "lxc"
+	}
+	return fmt.Sprintf(
+		"%s %d %s @ %s: %s\ncpu %s  mem %s (%s / %s)  disk %s (%s / %s)  uptime %s",
+		kind,
+		resource.VMID,
+		name,
+		resource.Node,
+		resource.Status,
+		percent(resource.CPU),
+		ratioPercent(resource.Mem, resource.MaxMem),
+		bytesHuman(resource.Mem),
+		bytesHuman(resource.MaxMem),
+		ratioPercent(resource.Disk, resource.MaxDisk),
+		bytesHuman(resource.Disk),
+		bytesHuman(resource.MaxDisk),
+		durationHuman(resource.Uptime),
+	)
+}
+
+func proxmoxNodeWarnings(resource proxmoxResource) []string {
+	warnings := []string{}
+	name := resource.Node
+	if name == "" {
+		name = resource.Name
+	}
+	if !strings.EqualFold(resource.Status, "online") {
+		warnings = append(warnings, fmt.Sprintf("%s offline", name))
+	}
+	if resource.CPU >= 0.9 {
+		warnings = append(warnings, fmt.Sprintf("%s high cpu %s", name, percent(resource.CPU)))
+	}
+	if ratio(resource.Mem, resource.MaxMem) >= 0.9 {
+		warnings = append(warnings, fmt.Sprintf("%s high memory %s", name, ratioPercent(resource.Mem, resource.MaxMem)))
+	}
+	if ratio(resource.Disk, resource.MaxDisk) >= 0.9 {
+		warnings = append(warnings, fmt.Sprintf("%s high disk %s", name, ratioPercent(resource.Disk, resource.MaxDisk)))
+	}
+	return warnings
+}
+
+func cpuSummary(resource proxmoxResource) string {
+	if resource.MaxCPU <= 0 {
+		return percent(resource.CPU)
+	}
+	return fmt.Sprintf("%s of %.0f cores", percent(resource.CPU), resource.MaxCPU)
+}
+
+func ratio(value, maxValue float64) float64 {
+	if maxValue <= 0 {
+		return 0
+	}
+	return value / maxValue
 }
 
 func filterProxmoxResources(resources []proxmoxResource, nodes []string) []proxmoxResource {

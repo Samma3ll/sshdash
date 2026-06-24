@@ -8,7 +8,9 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
+	"sshdash/internal/checks"
 	"sshdash/internal/config"
 )
 
@@ -182,6 +184,123 @@ func TestSettingsSaveRejectsInvalidPendingConfig(t *testing.T) {
 	}
 }
 
+func TestOverviewOpensAndClosesDetailPageWithKeyboard(t *testing.T) {
+	m := detailTestModel()
+
+	m = updateModel(t, m, keyType(tea.KeyEnter))
+	if m.detail != detailServices {
+		t.Fatalf("detail = %q, want %q", m.detail, detailServices)
+	}
+
+	m = updateModel(t, m, keyType(tea.KeyEsc))
+	if m.detail != detailNone {
+		t.Fatalf("detail after esc = %q, want empty", m.detail)
+	}
+
+	m = updateModel(t, m, keyType(tea.KeyEnter))
+	m = updateModel(t, m, keyType(tea.KeyBackspace))
+	if m.detail != detailNone {
+		t.Fatalf("detail after backspace = %q, want empty", m.detail)
+	}
+}
+
+func TestOverviewSelectionSkipsHiddenCards(t *testing.T) {
+	m := newModel(testConfig(), "")
+	m.width = 120
+	m.results = []checks.Result{
+		testResult("router", "service", checks.StatusOK, "reachable"),
+		testResult("api", "api", checks.StatusOK, "ok"),
+	}
+
+	m = updateModel(t, m, keyType(tea.KeyTab))
+	if m.selected != 1 {
+		t.Fatalf("selected = %d, want 1", m.selected)
+	}
+	m = updateModel(t, m, keyType(tea.KeyEnter))
+	if m.detail != detailAPIs {
+		t.Fatalf("detail = %q, want %q", m.detail, detailAPIs)
+	}
+}
+
+func TestDetailPagesRenderCurrentResults(t *testing.T) {
+	m := detailTestModel()
+
+	cases := map[detailPage][]string{
+		detailServices: {"Services", "router", "reachable"},
+		detailAPIs:     {"APIs", "api", "ok"},
+		detailProxmox:  {"Proxmox", "Proxmox Health", "Proxmox VMs"},
+		detailPBS:      {"PBS", "PBS Health", "PBS Datastore Details"},
+		detailDocker:   {"Docker", "Docker Containers", "container"},
+	}
+
+	for page, wants := range cases {
+		m.detail = page
+		view := m.renderDetailPage()
+		for _, want := range wants {
+			if !strings.Contains(view, want) {
+				t.Fatalf("detail %q missing %q:\n%s", page, want, view)
+			}
+		}
+	}
+}
+
+func TestOverviewCardsUseCompactRows(t *testing.T) {
+	m := detailTestModel()
+	m.results[2].Details = []string{"pve1: online\ncpu 91% of 8 cores  mem 95%"}
+	m.results[3].Details = []string{"vm 100 homeassistant @ pve1: running\ncpu 2%  mem 79%"}
+
+	overview := m.renderOverviewPage(filterResults(m.results, "service"), filterResults(m.results, "api"))
+	if strings.Contains(overview, "cpu 91% of 8 cores") || strings.Contains(overview, "homeassistant @ pve1") {
+		t.Fatalf("overview should not render full detail lines:\n%s", overview)
+	}
+	if !strings.Contains(overview, "1 online") {
+		t.Fatalf("overview should keep summaries:\n%s", overview)
+	}
+	if !strings.Contains(overview, "proxmox") {
+		t.Fatalf("overview should keep result names:\n%s", overview)
+	}
+
+	m.detail = detailProxmox
+	detail := m.renderDetailPage()
+	if !strings.Contains(detail, "cpu 91% of 8 cores") || !strings.Contains(detail, "homeassistant @ pve1") {
+		t.Fatalf("detail should render full detail lines:\n%s", detail)
+	}
+}
+
+func TestMouseHitboxOpensCard(t *testing.T) {
+	m := detailTestModel()
+	page, ok := m.cardAtPanelPosition(1, 1)
+	if !ok || page != detailServices {
+		t.Fatalf("panel hit = %q %v, want services true", page, ok)
+	}
+
+	originY := m.overviewPanelOriginY()
+	m = updateModel(t, m, tea.MouseMsg(tea.MouseEvent{
+		X:      1,
+		Y:      originY + 1,
+		Button: tea.MouseButtonLeft,
+		Action: tea.MouseActionPress,
+	}))
+	if m.detail != detailServices {
+		t.Fatalf("detail after mouse = %q, want %q", m.detail, detailServices)
+	}
+}
+
+func TestViewUsesFullTerminalHeightForFooter(t *testing.T) {
+	m := detailTestModel()
+	m.width = 100
+	m.height = 24
+
+	view := m.View()
+	if got := lipgloss.Height(view); got != m.height {
+		t.Fatalf("view height = %d, want %d", got, m.height)
+	}
+	lines := strings.Split(view, "\n")
+	if !strings.Contains(lines[len(lines)-1], "q quit") {
+		t.Fatalf("last line = %q, want footer help", lines[len(lines)-1])
+	}
+}
+
 func testConfig() config.Config {
 	return config.Config{
 		Refresh: 2 * time.Second,
@@ -191,6 +310,36 @@ func testConfig() config.Config {
 		APIs: []config.APIConfig{
 			{Name: "api", URL: "https://example.com", Parser: "default", Timeout: time.Second},
 		},
+	}
+}
+
+func detailTestModel() model {
+	m := newModel(fullCardConfig(), "")
+	m.width = 140
+	m.height = 40
+	m.results = []checks.Result{
+		testResult("router", "service", checks.StatusOK, "reachable"),
+		testResult("api", "api", checks.StatusOK, "ok"),
+		testResult("proxmox", "proxmox-health", checks.StatusOK, "1 online, 0 offline nodes"),
+		testResult("vms", "proxmox-vms", checks.StatusWarning, "1 running, 1 stopped VMs"),
+		testResult("pbs", "pbs-health", checks.StatusOK, "24h tasks: 1 ok, 0 running, 0 failed"),
+		testResult("datastores", "pbs-details", checks.StatusOK, "1 datastores"),
+		testResult("docker", "docker", checks.StatusOK, "1 running, 0 stopped, 0 unhealthy, 0 restarting"),
+	}
+	m.results[3].Details = []string{"100 homeassistant @ pve-1: running"}
+	m.results[6].Details = []string{"container: Up 2 hours"}
+	return m
+}
+
+func testResult(name, kind string, status checks.Status, summary string) checks.Result {
+	return checks.Result{
+		Name:      name,
+		Kind:      kind,
+		Status:    status,
+		Target:    "https://example.com",
+		Summary:   summary,
+		CheckedAt: time.Date(2026, 6, 24, 12, 0, 0, 0, time.UTC),
+		Latency:   15 * time.Millisecond,
 	}
 }
 

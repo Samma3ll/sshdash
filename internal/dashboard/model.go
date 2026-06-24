@@ -31,6 +31,9 @@ type model struct {
 	mode     appMode
 	settings settingsModel
 	status   string
+	selected int
+	detail   detailPage
+	hitboxes []cardHitbox
 }
 
 type checkResultsMsg []checks.Result
@@ -51,13 +54,24 @@ const (
 	modeSettings
 )
 
+type detailPage string
+
+const (
+	detailNone     detailPage = ""
+	detailServices detailPage = "services"
+	detailAPIs     detailPage = "apis"
+	detailProxmox  detailPage = "proxmox"
+	detailPBS      detailPage = "pbs"
+	detailDocker   detailPage = "docker"
+)
+
 var dashboardTabs = []string{"Overview", "Media"}
 
 func NewProgram(cfg config.Config, cfgPath string) func(ssh.Session) (tea.Model, []tea.ProgramOption) {
 	return func(_ ssh.Session) (tea.Model, []tea.ProgramOption) {
 		lipgloss.SetColorProfile(termenv.ANSI256)
 
-		return newModel(cfg, cfgPath), []tea.ProgramOption{tea.WithAltScreen()}
+		return newModel(cfg, cfgPath), []tea.ProgramOption{tea.WithAltScreen(), tea.WithMouseCellMotion()}
 	}
 }
 
@@ -103,18 +117,52 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "r":
 			m.status = ""
 			return m, m.runChecks()
-		case "tab", "right", "l":
-			m.tab = (m.tab + 1) % len(dashboardTabs)
+		case "esc", "backspace":
+			if m.detail != detailNone {
+				m.detail = detailNone
+				return m, nil
+			}
+		case "enter":
+			if m.detail == detailNone && m.isOverviewTab() {
+				m.openSelectedCard()
+			}
 			return m, nil
-		case "shift+tab", "left", "h":
-			m.tab = (m.tab + len(dashboardTabs) - 1) % len(dashboardTabs)
+		case "tab", "right", "down", "l", "j":
+			if m.detail == detailNone && m.isOverviewTab() && m.moveSelectedCard(1) {
+				return m, nil
+			}
+			if msg.String() == "tab" || msg.String() == "right" || msg.String() == "l" {
+				m.tab = (m.tab + 1) % len(dashboardTabs)
+				m.detail = detailNone
+			}
+			return m, nil
+		case "shift+tab", "left", "up", "h", "k":
+			if m.detail == detailNone && m.isOverviewTab() && m.moveSelectedCard(-1) {
+				return m, nil
+			}
+			if msg.String() == "shift+tab" || msg.String() == "left" || msg.String() == "h" {
+				m.tab = (m.tab + len(dashboardTabs) - 1) % len(dashboardTabs)
+				m.detail = detailNone
+			}
 			return m, nil
 		case "1":
 			m.tab = 0
+			m.detail = detailNone
 			return m, nil
 		case "2":
 			m.tab = 1
+			m.detail = detailNone
 			return m, nil
+		}
+	case tea.MouseMsg:
+		if m.mode == modeDashboard && m.detail == detailNone && m.isOverviewTab() {
+			event := tea.MouseEvent(msg)
+			if event.Button == tea.MouseButtonLeft && event.Action == tea.MouseActionPress {
+				if page, ok := m.cardAt(event.X, event.Y); ok {
+					m.detail = page
+					return m, nil
+				}
+			}
 		}
 	case spinner.TickMsg:
 		var cmd tea.Cmd
@@ -141,6 +189,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.err = nil
 		m.status = "settings saved"
 		m.mode = modeDashboard
+		m.detail = detailNone
+		m.selected = 0
 		return m, m.runChecks()
 	case tickMsg:
 		return m, m.runChecks()
@@ -181,27 +231,54 @@ func (m model) View() string {
 	if m.mode == modeSettings {
 		body := m.settings.View(m.width, m.height)
 		help := helpStyle.Render("tab sections  up/down field  enter edit/toggle  a add  d delete  h header  ctrl+s save  esc back")
-		content := lipgloss.JoinVertical(lipgloss.Left, header, "", body, "", help)
-		if m.height > 0 {
-			return lipgloss.Place(m.width, m.height, lipgloss.Left, lipgloss.Top, content)
-		}
-		return content
+		return m.renderWithFooter([]string{header, "", body}, help)
 	}
 
 	tabs := m.renderTabs()
-	help := helpStyle.Render("tab switch  1 overview  2 media  r refresh  s settings  q quit")
+	helpText := "tab/arrows select  enter open  1 overview  2 media  r refresh  s settings  q quit"
+	if m.detail != detailNone {
+		helpText = "esc back  r refresh  s settings  q quit"
+	} else if !m.isOverviewTab() {
+		helpText = "tab switch  1 overview  2 media  r refresh  s settings  q quit"
+	}
+	help := helpStyle.Render(helpText)
 	body := m.renderBody()
 	parts := []string{header, tabs}
 	if m.status != "" {
 		parts = append(parts, successStyle.Render(m.status))
 	}
-	parts = append(parts, "", body, "", help)
-	content := lipgloss.JoinVertical(lipgloss.Left, parts...)
+	parts = append(parts, "", body)
 
-	if m.height > 0 {
-		return lipgloss.Place(m.width, m.height, lipgloss.Left, lipgloss.Top, content)
+	return m.renderWithFooter(parts, help)
+}
+
+func (m model) renderWithFooter(parts []string, footer string) string {
+	content := lipgloss.JoinVertical(lipgloss.Left, parts...)
+	if m.height <= 0 {
+		return lipgloss.JoinVertical(lipgloss.Left, content, "", footer)
 	}
-	return content
+
+	footerHeight := lipgloss.Height(footer)
+	bodyHeight := max(0, m.height-footerHeight)
+	body := fitHeight(content, bodyHeight)
+	if body == "" {
+		return footer
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, body, footer)
+}
+
+func fitHeight(content string, height int) string {
+	if height <= 0 {
+		return ""
+	}
+	lines := strings.Split(content, "\n")
+	if len(lines) > height {
+		lines = lines[:height]
+	}
+	for len(lines) < height {
+		lines = append(lines, "")
+	}
+	return strings.Join(lines, "\n")
 }
 
 type tickMsg struct{}
@@ -253,7 +330,11 @@ func (m model) renderBody() string {
 	summary := m.renderSummaryBar()
 	var panels string
 	if dashboardTabs[m.tab] == "Media" {
+		m.hitboxes = nil
 		panels = m.renderMediaPage()
+	} else if m.detail != detailNone {
+		m.hitboxes = nil
+		panels = m.renderDetailPage()
 	} else {
 		panels = m.renderOverviewPage(services, apis)
 	}
@@ -262,31 +343,120 @@ func (m model) renderBody() string {
 }
 
 func (m model) renderOverviewPage(services []checks.Result, apis []checks.Result) string {
+	cards := m.overviewCards(services, apis)
+	m.clampSelected(cards)
 	return m.renderDashboardColumns([][]dashboardCard{
 		{
-			{Sections: []dashboardSection{
-				{Title: "Services", Results: services, AlwaysShow: true},
-			}},
-			{Sections: []dashboardSection{
-				{Title: "Proxmox Health", Results: filterResults(m.results, "proxmox-health")},
-				{Title: "Proxmox VMs", Results: filterResults(m.results, "proxmox-vms")},
-			}},
+			cards[0],
+			cards[2],
 		},
 		{
-			{Sections: []dashboardSection{
-				{Title: "APIs", Results: apis, AlwaysShow: true},
-			}},
-			{Sections: []dashboardSection{
-				{Title: "PBS Health", Results: filterResults(m.results, "pbs-health")},
-				{Title: "PBS Datastore Details", Results: filterResults(m.results, "pbs-details")},
-			}},
+			cards[1],
+			cards[3],
 		},
 		{
-			{Sections: []dashboardSection{
-				{Title: "Docker Containers", Results: filterResults(m.results, "docker")},
-			}},
+			cards[4],
 		},
 	})
+}
+
+func (m model) overviewCards(services []checks.Result, apis []checks.Result) []dashboardCard {
+	return []dashboardCard{
+		{
+			ID:    detailServices,
+			Title: "Services",
+			Sections: []dashboardSection{
+				{Title: "Services", Results: services, AlwaysShow: true},
+			},
+		},
+		{
+			ID:    detailAPIs,
+			Title: "APIs",
+			Sections: []dashboardSection{
+				{Title: "APIs", Results: apis, AlwaysShow: true},
+			},
+		},
+		{
+			ID:    detailProxmox,
+			Title: "Proxmox",
+			Sections: []dashboardSection{
+				{Title: "Proxmox Health", Results: filterResults(m.results, "proxmox-health")},
+				{Title: "Proxmox VMs", Results: filterResults(m.results, "proxmox-vms")},
+			},
+		},
+		{
+			ID:    detailPBS,
+			Title: "PBS",
+			Sections: []dashboardSection{
+				{Title: "PBS Health", Results: filterResults(m.results, "pbs-health")},
+				{Title: "PBS Datastore Details", Results: filterResults(m.results, "pbs-details")},
+			},
+		},
+		{
+			ID:    detailDocker,
+			Title: "Docker",
+			Sections: []dashboardSection{
+				{Title: "Docker Containers", Results: filterResults(m.results, "docker")},
+			},
+		},
+	}
+}
+
+func (m model) renderDetailPage() string {
+	width := max(42, min(m.width, 110))
+	switch m.detail {
+	case detailServices:
+		return m.renderDetailPanel("Services", []dashboardSection{
+			{Title: "Services", Results: filterResults(m.results, "service"), AlwaysShow: true},
+		}, width)
+	case detailAPIs:
+		return m.renderDetailPanel("APIs", []dashboardSection{
+			{Title: "APIs", Results: filterResults(m.results, "api"), AlwaysShow: true},
+		}, width)
+	case detailProxmox:
+		return m.renderDetailPanel("Proxmox", []dashboardSection{
+			{Title: "Proxmox Health", Results: filterResults(m.results, "proxmox-health")},
+			{Title: "Proxmox VMs", Results: filterResults(m.results, "proxmox-vms")},
+		}, width)
+	case detailPBS:
+		return m.renderDetailPanel("PBS", []dashboardSection{
+			{Title: "PBS Health", Results: filterResults(m.results, "pbs-health")},
+			{Title: "PBS Datastore Details", Results: filterResults(m.results, "pbs-details")},
+		}, width)
+	case detailDocker:
+		return m.renderDetailPanel("Docker", []dashboardSection{
+			{Title: "Docker Containers", Results: filterResults(m.results, "docker")},
+		}, width)
+	default:
+		return ""
+	}
+}
+
+func (m model) renderDetailPanel(title string, sections []dashboardSection, width int) string {
+	card := dashboardCard{Title: title, Sections: sections}
+	if len(card.visibleSections()) == 0 {
+		return mutedStyle.Render("No data for " + title + ".")
+	}
+
+	lines := []string{detailTitleStyle.Render(title), mutedStyle.Render("Esc/backspace returns to overview."), ""}
+	for sectionIndex, section := range card.visibleSections() {
+		if sectionIndex > 0 {
+			lines = append(lines, "")
+		}
+		titleText := fmt.Sprintf("%s %s", section.Title, countStyle.Render(fmt.Sprintf("%d", len(section.Results))))
+		lines = append(lines, panelTitleStyle(section.Title).Render(titleText))
+		if len(section.Results) == 0 {
+			lines = append(lines, mutedStyle.Render("No targets configured."))
+			continue
+		}
+		for _, result := range section.Results {
+			lines = append(lines, renderResult(result, width-8))
+			lines = append(lines, "")
+		}
+		lines = lines[:len(lines)-1]
+	}
+
+	return detailPanelStyle(card.accentTitle()).Width(width).Render(strings.Join(lines, "\n"))
 }
 
 func (m model) renderMediaPage() string {
@@ -320,6 +490,8 @@ func (m model) renderTabs() string {
 }
 
 type dashboardCard struct {
+	ID       detailPage
+	Title    string
 	Sections []dashboardSection
 }
 
@@ -351,6 +523,7 @@ func (m model) renderSummaryBar() string {
 }
 
 func (m model) renderDashboardColumns(groups [][]dashboardCard) string {
+	m.hitboxes = nil
 	visibleGroups := make([][]dashboardCard, 0, len(groups))
 	for _, group := range groups {
 		visible := make([]dashboardCard, 0, len(group))
@@ -381,25 +554,32 @@ func (m model) renderDashboardColumns(groups [][]dashboardCard) string {
 
 	if columns == 1 {
 		all := []string{}
+		y := 0
 		for _, group := range visibleGroups {
 			for _, card := range group {
-				all = append(all, m.renderPanel(card, width))
+				rendered := m.renderPanel(card, width)
+				all = append(all, rendered)
+				m.recordHitbox(card, 0, y, lipgloss.Width(rendered), lipgloss.Height(rendered))
+				y += lipgloss.Height(rendered) + 1
 			}
 		}
 		return strings.Join(all, "\n")
 	}
 
 	renderedColumns := make([]string, 0, columns*2-1)
+	x := 0
 	for i := 0; i < columns; i++ {
-		renderedColumns = append(renderedColumns, m.renderCardColumn(visibleGroups[i], width))
+		column := m.renderCardColumn(visibleGroups[i], width, x)
+		renderedColumns = append(renderedColumns, column)
 		if i < columns-1 {
 			renderedColumns = append(renderedColumns, strings.Repeat(" ", gap))
 		}
+		x += lipgloss.Width(column) + gap
 	}
 	if len(visibleGroups) > columns {
 		overflow := []string{}
 		for _, group := range visibleGroups[columns:] {
-			overflow = append(overflow, m.renderCardColumn(group, width))
+			overflow = append(overflow, m.renderCardColumn(group, width, 0))
 		}
 		return lipgloss.JoinVertical(
 			lipgloss.Left,
@@ -410,10 +590,14 @@ func (m model) renderDashboardColumns(groups [][]dashboardCard) string {
 	return lipgloss.JoinHorizontal(lipgloss.Top, renderedColumns...)
 }
 
-func (m model) renderCardColumn(cards []dashboardCard, width int) string {
+func (m model) renderCardColumn(cards []dashboardCard, width int, x int) string {
 	rendered := make([]string, 0, len(cards))
+	y := 0
 	for _, card := range cards {
-		rendered = append(rendered, m.renderPanel(card, width))
+		panel := m.renderPanel(card, width)
+		rendered = append(rendered, panel)
+		m.recordHitbox(card, x, y, lipgloss.Width(panel), lipgloss.Height(panel))
+		y += lipgloss.Height(panel) + 1
 	}
 	return strings.Join(rendered, "\n")
 }
@@ -433,13 +617,25 @@ func (m model) renderPanel(card dashboardCard, width int) string {
 			continue
 		}
 		for _, result := range section.Results {
-			lines = append(lines, renderResult(result, width-4))
+			if card.ID != detailNone {
+				lines = append(lines, renderCompactResult(result, width-4))
+			} else {
+				lines = append(lines, renderResult(result, width-4))
+			}
 			lines = append(lines, "")
 		}
 		lines = lines[:len(lines)-1]
 	}
 
-	return panelStyle(card.accentTitle()).Width(width).Render(strings.Join(lines, "\n"))
+	if card.ID != detailNone {
+		hint := "enter/click open"
+		if m.cardIsSelected(card) {
+			hint = "> " + hint
+		}
+		lines = append(lines, "", openHintStyle(m.cardIsSelected(card)).Render(hint))
+	}
+
+	return panelStyle(card.accentTitle(), m.cardIsSelected(card)).Width(width).Render(strings.Join(lines, "\n"))
 }
 
 func (c dashboardCard) visibleSections() []dashboardSection {
@@ -453,6 +649,9 @@ func (c dashboardCard) visibleSections() []dashboardSection {
 }
 
 func (c dashboardCard) accentTitle() string {
+	if c.Title != "" {
+		return c.Title
+	}
 	for _, section := range c.Sections {
 		if section.AlwaysShow || len(section.Results) > 0 {
 			return section.Title
@@ -462,6 +661,211 @@ func (c dashboardCard) accentTitle() string {
 		return c.Sections[0].Title
 	}
 	return ""
+}
+
+func (m model) isOverviewTab() bool {
+	return dashboardTabs[m.tab] == "Overview"
+}
+
+func (m *model) clampSelected(cards []dashboardCard) {
+	count := openableCardCount(cards)
+	if count == 0 {
+		m.selected = 0
+		return
+	}
+	if m.selected < 0 {
+		m.selected = 0
+	}
+	if m.selected >= count {
+		m.selected = count - 1
+	}
+}
+
+func (m *model) moveSelectedCard(delta int) bool {
+	cards := m.overviewCards(filterResults(m.results, "service"), filterResults(m.results, "api"))
+	count := openableCardCount(cards)
+	if count == 0 {
+		m.selected = 0
+		return false
+	}
+	m.selected = (m.selected + delta + count) % count
+	return true
+}
+
+func (m *model) openSelectedCard() {
+	cards := m.overviewCards(filterResults(m.results, "service"), filterResults(m.results, "api"))
+	m.clampSelected(cards)
+	index := 0
+	for _, card := range cards {
+		if card.ID == detailNone || len(card.visibleSections()) == 0 {
+			continue
+		}
+		if index == m.selected {
+			m.detail = card.ID
+			return
+		}
+		index++
+	}
+}
+
+func (m model) cardIsSelected(card dashboardCard) bool {
+	if card.ID == detailNone || len(card.visibleSections()) == 0 {
+		return false
+	}
+	index := 0
+	for _, candidate := range m.overviewCards(filterResults(m.results, "service"), filterResults(m.results, "api")) {
+		if candidate.ID == detailNone || len(candidate.visibleSections()) == 0 {
+			continue
+		}
+		if candidate.ID == card.ID {
+			return index == m.selected
+		}
+		index++
+	}
+	return false
+}
+
+func openableCardCount(cards []dashboardCard) int {
+	count := 0
+	for _, card := range cards {
+		if card.ID != detailNone && len(card.visibleSections()) > 0 {
+			count++
+		}
+	}
+	return count
+}
+
+type cardHitbox struct {
+	page   detailPage
+	x, y   int
+	width  int
+	height int
+}
+
+func (m *model) recordHitbox(card dashboardCard, x, y, width, height int) {
+	if card.ID == detailNone || len(card.visibleSections()) == 0 {
+		return
+	}
+	m.hitboxes = append(m.hitboxes, cardHitbox{
+		page:   card.ID,
+		x:      x,
+		y:      y,
+		width:  width,
+		height: height,
+	})
+}
+
+func (m model) cardAt(x, y int) (detailPage, bool) {
+	hitboxes := m.hitboxes
+	panelY := y - m.overviewPanelOriginY()
+	if len(hitboxes) == 0 {
+		hitboxes = m.overviewHitboxes()
+	}
+	for _, hitbox := range hitboxes {
+		if x >= hitbox.x && x < hitbox.x+hitbox.width && panelY >= hitbox.y && panelY < hitbox.y+hitbox.height {
+			return hitbox.page, true
+		}
+	}
+	return detailNone, false
+}
+
+func (m model) overviewPanelOriginY() int {
+	y := 3
+	if m.status != "" {
+		y++
+	}
+	if len(m.results) > 0 {
+		y += lipgloss.Height(m.renderSummaryBar())
+	}
+	return y
+}
+
+func (m model) overviewHitboxes() []cardHitbox {
+	cards := m.overviewCards(filterResults(m.results, "service"), filterResults(m.results, "api"))
+	groups := [][]dashboardCard{
+		{cards[0], cards[2]},
+		{cards[1], cards[3]},
+		{cards[4]},
+	}
+
+	visibleGroups := make([][]dashboardCard, 0, len(groups))
+	for _, group := range groups {
+		visible := make([]dashboardCard, 0, len(group))
+		for _, card := range group {
+			if len(card.visibleSections()) > 0 {
+				visible = append(visible, card)
+			}
+		}
+		if len(visible) > 0 {
+			visibleGroups = append(visibleGroups, visible)
+		}
+	}
+	if len(visibleGroups) == 0 {
+		return nil
+	}
+
+	columns := min(len(visibleGroups), 1)
+	if m.width >= 132 {
+		columns = min(len(visibleGroups), 3)
+	} else if m.width >= 88 {
+		columns = min(len(visibleGroups), 2)
+	}
+
+	gap := 2
+	panelOuterOverhead := 6
+	available := max(1, m.width-(columns-1)*gap)
+	width := clamp((available/columns)-panelOuterOverhead, 30, 68)
+
+	hitboxes := []cardHitbox{}
+	if columns == 1 {
+		y := 0
+		for _, group := range visibleGroups {
+			for _, card := range group {
+				rendered := m.renderPanel(card, width)
+				hitboxes = append(hitboxes, cardHitbox{page: card.ID, x: 0, y: y, width: lipgloss.Width(rendered), height: lipgloss.Height(rendered)})
+				y += lipgloss.Height(rendered) + 1
+			}
+		}
+		return hitboxes
+	}
+
+	x := 0
+	for i := 0; i < columns; i++ {
+		y := 0
+		columnWidth := 0
+		for _, card := range visibleGroups[i] {
+			rendered := m.renderPanel(card, width)
+			columnWidth = max(columnWidth, lipgloss.Width(rendered))
+			hitboxes = append(hitboxes, cardHitbox{page: card.ID, x: x, y: y, width: lipgloss.Width(rendered), height: lipgloss.Height(rendered)})
+			y += lipgloss.Height(rendered) + 1
+		}
+		x += columnWidth + gap
+	}
+	if len(visibleGroups) > columns {
+		yOffset := 0
+		for i := 0; i < columns; i++ {
+			column := m.renderCardColumn(visibleGroups[i], width, 0)
+			yOffset = max(yOffset, lipgloss.Height(column))
+		}
+		for _, group := range visibleGroups[columns:] {
+			y := yOffset
+			for _, card := range group {
+				rendered := m.renderPanel(card, width)
+				hitboxes = append(hitboxes, cardHitbox{page: card.ID, x: 0, y: y, width: lipgloss.Width(rendered), height: lipgloss.Height(rendered)})
+				y += lipgloss.Height(rendered) + 1
+			}
+		}
+	}
+	return hitboxes
+}
+
+func (m model) cardAtPanelPosition(x, y int) (detailPage, bool) {
+	for _, hitbox := range m.overviewHitboxes() {
+		if x >= hitbox.x && x < hitbox.x+hitbox.width && y >= hitbox.y && y < hitbox.y+hitbox.height {
+			return hitbox.page, true
+		}
+	}
+	return detailNone, false
 }
 
 func renderResult(result checks.Result, width int) string {
@@ -528,6 +932,31 @@ func renderResult(result checks.Result, width int) string {
 	}
 
 	return lipgloss.JoinVertical(lipgloss.Left, append([]string{firstLine}, detailLines...)...)
+}
+
+func renderCompactResult(result checks.Result, width int) string {
+	dot := statusDotStyle(result.Status).Render("●")
+	status := statusTextStyle(result.Status).Render(statusLabel(result.Status))
+	name := nameStyle.Render(truncate(result.Name, 16))
+	latency := latencyStyle.Render(result.Latency.Truncate(time.Millisecond).String())
+
+	firstLineGap := strings.Repeat(" ", max(1, width-lipgloss.Width(dot)-lipgloss.Width(status)-lipgloss.Width(name)-lipgloss.Width(latency)-5))
+	firstLine := lipgloss.JoinHorizontal(
+		lipgloss.Top,
+		dot,
+		" ",
+		status,
+		" ",
+		name,
+		firstLineGap,
+		latency,
+	)
+
+	summaryWidth := max(10, width-3)
+	summary := summaryStyle.Width(summaryWidth).Render(truncate(result.Summary, summaryWidth))
+	summaryLine := detailStyle.MarginLeft(3).Width(summaryWidth).Render(summary)
+
+	return lipgloss.JoinVertical(lipgloss.Left, firstLine, summaryLine)
 }
 
 func statusCounts(results []checks.Result) (int, int, int) {

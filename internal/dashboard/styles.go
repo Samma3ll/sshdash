@@ -113,7 +113,19 @@ var (
 				Foreground(lipgloss.Color("195"))
 )
 
-func panelStyle(title string) lipgloss.Style {
+func panelStyle(title string, selected bool) lipgloss.Style {
+	style := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(panelAccent(title)).
+		Padding(1, 2).
+		MarginTop(1)
+	if selected {
+		style = style.BorderForeground(lipgloss.Color("229"))
+	}
+	return style
+}
+
+func detailPanelStyle(title string) lipgloss.Style {
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(panelAccent(title)).
@@ -130,17 +142,34 @@ func panelTitleStyle(title string) lipgloss.Style {
 		MarginBottom(1)
 }
 
+var detailTitleStyle = lipgloss.NewStyle().
+	Bold(true).
+	Foreground(lipgloss.Color("231")).
+	Background(lipgloss.Color("57")).
+	Padding(0, 1).
+	MarginBottom(1)
+
+func openHintStyle(selected bool) lipgloss.Style {
+	style := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("146")).
+		Italic(true)
+	if selected {
+		return style.Foreground(lipgloss.Color("229")).Bold(true)
+	}
+	return style
+}
+
 func panelAccent(title string) lipgloss.Color {
 	switch title {
 	case "Services":
 		return lipgloss.Color("39")
-	case "Docker Containers":
+	case "Docker", "Docker Containers":
 		return lipgloss.Color("45")
 	case "Jellyfin Library", "Radarr", "Sonarr", "Jellyseerr":
 		return lipgloss.Color("99")
-	case "Proxmox Health", "Proxmox VMs":
+	case "Proxmox", "Proxmox Health", "Proxmox VMs":
 		return lipgloss.Color("208")
-	case "PBS Health", "PBS Datastore Details":
+	case "PBS", "PBS Health", "PBS Datastore Details":
 		return lipgloss.Color("82")
 	default:
 		return lipgloss.Color("201")
